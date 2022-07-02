@@ -7,33 +7,35 @@ import (
 
 	"github.com/Contrast-Security-OSS/go-test-bench/internal/common"
 	"github.com/Contrast-Security-OSS/go-test-bench/internal/common/commontest"
+	"github.com/Contrast-Security-OSS/go-test-bench/pkg/servegin"
+	"github.com/Contrast-Security-OSS/go-test-bench/pkg/servestd"
 )
 
 type exercises struct {
-	client  *http.Client
-	log     common.Logger
-	verbose bool
-	addr    string
-	reqs    []commontest.RouteTestRequests
+	client     *http.Client
+	verbose    bool
+	standalone bool
+	addr       string
+	reqs       []commontest.RouteTestRequests
+	framework  string
+	rmap       common.RouteMap
 }
 
 // exercise was split up so that tests can report sub-test names
 func exercise(log common.Logger, verbose bool, addr string) error {
 	e := &exercises{
-		log:     log,
-		verbose: verbose,
-		addr:    addr,
+		verbose:    verbose,
+		addr:       addr,
+		standalone: true,
 	}
 	// create requests
-	if err := e.init(); err != nil {
-		return err
-	}
+	e.init(log)
 	e.checkAssets(log)
 
 	// send requests
 	for _, r := range e.reqs {
 		for _, s := range r.Sinks {
-			e.run(e.log, s)
+			e.run(log, s)
 		}
 	}
 	log.Logf("All routes exercised")
@@ -41,39 +43,50 @@ func exercise(log common.Logger, verbose bool, addr string) error {
 }
 
 // determine framework, then create (but do not send) requests
-func (e *exercises) init() error {
+func (e *exercises) init(log common.Logger) {
 	e.client = http.DefaultClient
 
-	framework := e.checkFramework()
+	e.checkFramework(log)
 
 	var err error
-	e.reqs, err = commontest.UnsafeRequests(e.addr)
+	e.reqs, err = commontest.UnsafeRequests(e.addr, e.rmap)
 	if err != nil {
-		e.log.Fatalf("failed to generate requests for %s framework: %s", framework, err)
+		log.Fatalf("failed to generate requests for %s framework: %s", e.framework, err)
 	}
-	return nil
 }
 
-// Send request to app root to determine checkFramework
-func (e *exercises) checkFramework() string {
+const hdrname = "Application-Framework"
+
+// Send request to app root to identify the framework in use
+func (e *exercises) checkFramework(log common.Logger) {
 	res, err := e.client.Get("http://" + e.addr)
 	if err != nil {
-		e.log.Fatalf("failed to GET root: %s", err)
+		log.Fatalf("failed to GET root: %s", err)
 	}
 	if res.StatusCode != http.StatusOK {
-		e.log.Fatalf("unsuccessful root response: %d", res.StatusCode)
+		log.Fatalf("unsuccessful root response: %d", res.StatusCode)
 	}
-
-	f := res.Header.Get("Application-Framework")
-	switch f {
-	case "Stdlib", "Gin":
-		//below
+	e.framework = res.Header.Get(hdrname)
+	switch e.framework {
+	case "Stdlib":
+		if e.standalone {
+			servestd.RegisterRoutes()
+			e.rmap = common.PopulateRouteMap(common.AllRoutes)
+		}
+	case "Gin":
+		if e.standalone {
+			servegin.RegisterRoutes()
+			e.rmap = common.PopulateRouteMap(common.AllRoutes)
+			e.rmap = servegin.PreMigrationFixups(e.rmap)
+		}
 	case "":
-		e.log.Fatalf("failed to determine application framework: no Application-Framework header")
+		log.Fatalf("failed to determine application framework: no %q header", hdrname)
 	default:
-		e.log.Fatalf("unsupported application framework: %s", f)
+		log.Fatalf("unsupported application framework: %s", e.framework)
 	}
-	return f
+	if e.rmap == nil {
+		e.rmap = common.GetRouteMap()
+	}
 }
 
 // ensure assets (currently only app.css) are loadable

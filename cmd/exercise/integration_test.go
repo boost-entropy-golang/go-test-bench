@@ -47,12 +47,10 @@ func TestExerciseIntegration(t *testing.T) {
 			addr := strings.TrimPrefix(srv.URL, "http://")
 
 			e := &exercises{
-				log:  t,
 				addr: addr,
 			}
-			if err := e.init(); err != nil {
-				t.Fatal(err)
-			}
+			e.init(t)
+
 			t.Run("check css asset content type", func(t *testing.T) {
 				e.checkAssets(t)
 			})
@@ -63,7 +61,7 @@ func TestExerciseIntegration(t *testing.T) {
 				t.Run(r.Name, func(t *testing.T) {
 					for _, s := range r.Sinks {
 						t.Run(s.Name, func(t *testing.T) {
-							e.run(e.log, s)
+							e.run(t, s)
 						})
 					}
 				})
